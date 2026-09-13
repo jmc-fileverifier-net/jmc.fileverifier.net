@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QR Code Verified</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
+        body { background-color: #f5f6fa; display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 15px; }
+        .container { background: white; max-width: 450px; width: 100%; padding: 30px 20px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.06); text-align: center; }
+        .status-title { color: #2ecc71; font-size: 24px; font-weight: 700; margin-bottom: 5px; }
+        .generated-date { color: #7f8c8d; font-size: 13px; margin-bottom: 20px; }
+        .section-heading { color: #000000; font-size: 16px; font-weight: 700; margin-bottom: 15px; }
+        .verification-table { width: 100%; border-collapse: collapse; margin-bottom: 25px; text-align: left; border: 1px solid #e2e8f0; }
+        .verification-table tr { border-bottom: 1px solid #e2e8f0; }
+        .verification-table tr:last-child { border-bottom: none; }
+        .verification-table td { padding: 12px 15px; font-size: 14px; vertical-align: middle; }
+        .verification-table td.label { background-color: #f8fafc; font-weight: 700; color: #2d3748; width: 35%; border-right: 1px solid #e2e8f0; }
+        .verification-table td.value { color: #4a5568; font-weight: 500; word-break: break-word; }
+        .btn-download { display: inline-block; background-color: #007bff; color: white; text-decoration: none; padding: 12px 35px; border-radius: 6px; font-weight: 500; font-size: 15px; border: none; cursor: pointer; transition: background-color 0.2s ease; box-shadow: 0 2px 5px rgba(0,123,255,0.2); text-transform: none; }
+        .btn-download:hover { background-color: #0056b3; }
+        .loading-text { color: #7f8c8d; font-size: 14px; font-style: italic; }
+        .error-container { color: #e74c3c; font-weight: bold; margin: 20px 0; font-size: 18px; }
+    </style>
+</head>
+<body>
+
+<div class="container" id="main-container">
+    <div class="status-title" id="status-text">QR Code Verified</div>
+    <div class="generated-date" id="live-date">Checking Registry...</div>
+    
+    <div class="section-heading">Information stored in the QR:</div>
+    
+    <table class="verification-table">
+        <tr><td class="label">Clinic</td><td class="value" id="data-clinic">Loading...</td></tr>
+        <tr><td class="label">Patient ID</td><td class="value" id="data-patient-id">Loading...</td></tr>
+        <tr><td class="label">Patient Name</td><td class="value" id="data-name">Loading...</td></tr>
+        <tr><td class="label">Age</td><td class="value" id="data-age">Loading...</td></tr>
+        <tr><td class="label">Gender</td><td class="value" id="data-gender">Loading...</td></tr>
+    </table>
+
+    <a id="download-btn" class="btn-download" style="display: none;">Download File</a>
+    <div id="status-msg" class="loading-text">Fetching secure data...</div>
+</div>
+
+<script>
+    const SHEET_WEB_LINK = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSpSYuaPid9Zhgx9iBkc9ohvrbvg-hWu1uMbmHS-eZcs_33gd8RaNMftdiqah2CFbroBlqj73_VBcKC/pub?output=csv';
+    const GITHUB_REPO_URL = 'https://es-chamber-org-sa.github.io/jmc.fileverifier.net/reports/';
+
+    const urlParams = new URLSearchParams(window.location.search);
+    const searchId = urlParams.get('id');
+
+    // Live Date Stamper
+    const options = { year: 'numeric', month: 'short', day: 'numeric' };
+    document.getElementById('live-date').innerText = "Generated on: " + new Date().toLocaleDateString('en-GB', options).replace(/ /g, '-') + " " + new Date().toLocaleTimeString('en-GB');
+
+    // Smart Dynamic Age Calculator
+    function calculateExactAge(dobData) {
+        if (!dobData) return 'N/A';
+        if (dobData.toString().toLowerCase().includes('y') || dobData.toString().includes(',')) {
+            return dobData; 
+        }
+        let dob = new Date(dobData);
+        if (isNaN(dob.getTime())) {
+            let parts = dobData.toString().split(/[-/]/);
+            if(parts.length === 3) {
+                if(parts[0].length === 4) dob = new Date(parts[0], parts[1]-1, parts[2]);
+                else dob = new Date(parts[2], parts[1]-1, parts[0]);
+            }
+        }
+        if (isNaN(dob.getTime())) return String(dobData);
+
+        let now = new Date();
+        let years = now.getFullYear() - dob.getFullYear();
+        let months = now.getMonth() - dob.getMonth();
+        let days = now.getDate() - dob.getDate();
+
+        if (days < 0) {
+            months--;
+            let prevMonth = new Date(now.getFullYear(), now.getMonth(), 0);
+            days += prevMonth.getDate();
+        }
+        if (months < 0) { years--; months += 12; }
+        return `${years} Y(s), ${months} M(s) ${days} D(s)`;
+    }
+
+    // High Performance CSV Parser
+    function parseCSV(text) {
+        let lines = text.split(/\r?\n/);
+        return lines.map(line => {
+            let result = [];
+            let current = '';
+            let inQuotes = false;
+            for (let i = 0; i < line.length; i++) {
+                let char = line[i];
+                if (char === '"') { inQuotes = !inQuotes; }
+                else if (char === ',' && !inQuotes) { result.push(current.trim()); current = ''; }
+                else { current += char; }
+            }
+            result.push(current.trim());
+            return result;
+        });
+    }
+
+    if (searchId) {
+        fetch(SHEET_WEB_LINK)
+            .then(res => res.text())
+            .then(csvText => {
+                let rows = parseCSV(csvText);
+                if (rows.length < 2) { showError("Database Ledger is Empty"); return; }
+                
+                let headers = rows[0].map(h => h.toLowerCase().trim());
+                let clinicIdx = headers.indexOf('clinic');
+                let patientIdIdx = headers.indexOf('patient id');
+                let nameIdx = headers.indexOf('patient name');
+                let ageIdx = headers.indexOf('age');
+                let genderIdx = headers.indexOf('gender');
+
+                let record = null;
+                let targetId = searchId.trim();
+
+                for (let i = 1; i < rows.length; i++) {
+                    let row = rows[i];
+                    if (!row[patientIdIdx]) continue;
+                    let sheetPatientId = row[patientIdIdx].toString().trim();
+                    
+                    if (sheetPatientId !== '' && (sheetPatientId === targetId || targetId.indexOf(sheetPatientId) !== -1)) {
+                        record = {
+                            clinic: row[clinicIdx] || 'N/A',
+                            patientId: sheetPatientId,
+                            name: row[nameIdx] || 'N/A',
+                            age: row[ageIdx] || 'N/A',
+                            gender: row[genderIdx] || 'N/A'
+                        };
+                        break;
+                    }
+                }
+
+                if (record) {
+                    document.getElementById('data-clinic').innerText = record.clinic;
+                    document.getElementById('data-patient-id').innerText = record.patientId;
+                    document.getElementById('data-name').innerText = record.name;
+                    document.getElementById('data-age').innerText = calculateExactAge(record.age);
+                    document.getElementById('data-gender').innerText = record.gender;
+                    document.getElementById('status-msg').style.display = 'none';
+
+                    const downloadBtn = document.getElementById('download-btn');
+                    
+                    // GitHub থেকে আসল ফাইলটা লোড করবে (যেমন: 101010.pdf)
+                    downloadBtn.href = `${GITHUB_REPO_URL}${record.patientId}.pdf`; 
+                    
+                    // 👑 পরিবর্তন এখানে: সব রোগীর ফাইল ডাউনলোড হওয়ার সময় "Verified_File.pdf" নামেই সেভ হবে
+                    downloadBtn.download = "Verified_File.pdf"; 
+                    
+                    downloadBtn.target = '_blank';
+                    downloadBtn.style.display = 'inline-block';
+                } else {
+                    showError("Invalid Patient ID / Not Found");
+                }
+            })
+            .catch(() => showError("Database Connection Error."));
+    } else {
+        showError("No Patient ID Specified");
+    }
+
+    function showError(message) {
+        document.getElementById('status-text').innerText = "Verification Failed";
+        document.getElementById('status-text').style.color = "#e74c3c";
+        document.getElementById('main-container').innerHTML = `<div class="error-container">${message}</div><p style="color:#7f8c8d; font-size:14px; margin-top:10px;">The document system could not verify this reference.</p>`;
+    }
+</script>
+</body>
+</html>
